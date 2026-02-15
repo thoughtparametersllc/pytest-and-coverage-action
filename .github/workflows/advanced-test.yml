@@ -1,0 +1,47 @@
+name: Advanced Test Coverage
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run pytest with coverage
+        id: test-coverage
+        uses: thoughtparametersllc/pytest-and-coverage-action@main
+        with:
+          python-version: ${{ matrix.python-version }}
+          requirements-file: 'requirements-dev.txt'
+          coverage-threshold: '85'
+          pytest-args: '--verbose --tb=short --cov-report=term-missing:skip-covered'
+          coverage-dir: 'coverage-reports'
+          upload-artifacts: 'true'
+          artifact-retention-days: '60'
+      
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage-reports/coverage.xml
+          fail_ci_if_error: false
+          verbose: true
+      
+      - name: Publish test results
+        if: always()
+        run: |
+          echo "Test Result: ${{ steps.test-coverage.outputs.test-result }}"
+          echo "Coverage: ${{ steps.test-coverage.outputs.coverage-percentage }}"
+          echo "Coverage Status: ${{ steps.test-coverage.outputs.coverage-status }}"

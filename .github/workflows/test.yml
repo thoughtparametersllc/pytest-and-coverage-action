@@ -1,0 +1,25 @@
+name: Test Coverage
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run pytest with coverage
+        uses: thoughtparametersllc/pytest-and-coverage-action@main
+        with:
+          python-version: ${{ matrix.python-version }}
+          coverage-threshold: '80'
+          pytest-args: '--verbose --tb=short'
+          upload-artifacts: 'true'

@@ -1,0 +1,173 @@
+name: 'Pytest with Coverage'
+description: 'Run pytest with coverage, upload artifacts, and create a GitHub Summary'
+author: 'Thought Parameters LLC'
+
+inputs:
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.11'
+  
+  requirements-file:
+    description: 'Path to requirements file'
+    required: false
+    default: 'requirements.txt'
+  
+  coverage-threshold:
+    description: 'Minimum coverage percentage threshold'
+    required: false
+    default: '80'
+  
+  pytest-args:
+    description: 'Additional arguments to pass to pytest'
+    required: false
+    default: '--verbose'
+  
+  coverage-dir:
+    description: 'Directory to store coverage reports'
+    required: false
+    default: '.coverage'
+  
+  upload-artifacts:
+    description: 'Whether to upload coverage artifacts'
+    required: false
+    default: 'true'
+  
+  artifact-retention-days:
+    description: 'Number of days to retain artifacts'
+    required: false
+    default: '30'
+
+outputs:
+  coverage-percentage:
+    description: 'Overall coverage percentage'
+    value: ${{ steps.coverage.outputs.percentage }}
+  
+  coverage-status:
+    description: 'Whether coverage meets threshold (success/failure)'
+    value: ${{ steps.coverage.outputs.status }}
+  
+  test-result:
+    description: 'Test result status'
+    value: ${{ steps.pytest.outputs.result }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f "${{ inputs.requirements-file }}" ]; then
+          pip install -r "${{ inputs.requirements-file }}"
+        fi
+        pip install pytest pytest-cov coverage
+
+    - name: Run pytest with coverage
+      id: pytest
+      shell: bash
+      run: |
+        mkdir -p "${{ inputs.coverage-dir }}"
+        python -m pytest ${{ inputs.pytest-args }} \
+          --cov=. \
+          --cov-report=html:${{ inputs.coverage-dir }}/html \
+          --cov-report=xml:${{ inputs.coverage-dir }}/coverage.xml \
+          --cov-report=term-missing:skip-covered \
+          --cov-report=json:${{ inputs.coverage-dir }}/coverage.json
+        
+        if [ $? -eq 0 ]; then
+          echo "result=success" >> $GITHUB_OUTPUT
+        else
+          echo "result=failure" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Parse coverage data
+      id: coverage
+      shell: bash
+      run: |
+        python << 'EOF'
+        import json
+        import os
+        
+        coverage_file = "${{ inputs.coverage-dir }}/coverage.json"
+        if os.path.exists(coverage_file):
+          with open(coverage_file, 'r') as f:
+            data = json.load(f)
+            percentage = data.get('totals', {}).get('percent_covered', 0)
+            print(f"coverage_percentage={percentage:.2f}")
+        else:
+          print("coverage_percentage=0.00")
+        EOF
+        
+        coverage_pct=$(grep coverage_percentage /tmp/coverage_output 2>/dev/null || echo "0")
+        echo "percentage=$coverage_pct" >> $GITHUB_OUTPUT
+        
+        threshold=${{ inputs.coverage-threshold }}
+        if (( $(echo "$coverage_pct >= $threshold" | bc -l) )); then
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create coverage summary
+      shell: bash
+      run: |
+        python << 'EOF'
+        import json
+        import os
+        
+        coverage_file = "${{ inputs.coverage-dir }}/coverage.json"
+        if os.path.exists(coverage_file):
+          with open(coverage_file, 'r') as f:
+            data = json.load(f)
+            totals = data.get('totals', {})
+            
+            coverage_pct = totals.get('percent_covered', 0)
+            statements = totals.get('num_statements', 0)
+            missing = totals.get('missing_lines', 0)
+            excluded = totals.get('excluded_lines', 0)
+            
+            summary = f"""## Coverage Report 📊
+            
+              | Metric | Value |
+              |--------|-------|
+              | Coverage | {coverage_pct:.2f}% |
+              | Statements | {statements} |
+              | Missing Lines | {missing} |
+              | Excluded Lines | {excluded} |
+
+              **Threshold**: ${{ inputs.coverage-threshold }}% - {'✅ PASSED' if coverage_pct >= float('${{ inputs.coverage-threshold }}') else '❌ FAILED'}
+
+              The coverage report is available in the artifacts.
+        """
+            
+            with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(summary)
+        EOF
+
+    - name: Upload coverage artifacts
+      if: ${{ inputs.upload-artifacts == 'true' }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-report
+        path: ${{ inputs.coverage-dir }}
+        retention-days: ${{ inputs.artifact-retention-days }}
+
+    - name: Check coverage threshold
+      shell: bash
+      run: |
+        coverage_pct=$(echo "${{ steps.coverage.outputs.percentage }}" | cut -d= -f2 || echo "0")
+        threshold=${{ inputs.coverage-threshold }}
+        
+        if (( $(echo "$coverage_pct >= $threshold" | bc -l) )); then
+          echo "✅ Coverage meets threshold: $coverage_pct% >= $threshold%"
+          exit 0
+        else
+          echo "❌ Coverage below threshold: $coverage_pct% < $threshold%"
+          exit 1
+        fi
